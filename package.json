@@ -11,6 +11,7 @@
     "preview": "cross-env NODE_ENV=production node server"
   },
   "dependencies": {
+    "@babel/plugin-transform-runtime": "^7.25.9",
     "compression": "^1.7.5",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
@@ -19,6 +20,8 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.0.1",
+    "react-speech-recognition": "^3.10.0",
+    "regenerator-runtime": "^0.14.1",
     "sirv": "^3.0.0",
     "translate-google-api": "^1.0.4",
     "ws": "^8.18.0"

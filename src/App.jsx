@@ -1,16 +1,19 @@
-import './App.css'
-import { Suspense, lazy } from 'react'
-import reactLogo from './assets/react.svg'
+import React, { Suspense, lazy } from 'react';
+import './App.css';
 
-// Works also with SSR as expected
-const Home = lazy(() => import('./Home'))
+// Dynamically import SpeechRecognition and disable SSR
+const SpeechRecognition = lazy(() => import('react-speech-recognition'));
+
+const Home = lazy(() => import('./Home'));
 
 function App() {
   return (
-    <>
-      <Home />
-    </>
-  )
+    <div className="App">
+      <Suspense fallback={<div>Loading...</div>}>
+        <Home />
+      </Suspense>
+    </div>
+  );
 }
 
-export default App
+export default App;

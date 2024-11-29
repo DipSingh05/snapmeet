@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition'
 import EmojiPicker from "emoji-picker-react";
 import "./App.css"; // Add CSS for animations and colors
 
@@ -28,6 +29,8 @@ function Home() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const isTranslateMessagesRef = useRef(isTranslateMessages);
+
+  const { transcript, browserSupportsSpeechRecognition } = useSpeechRecognition();
 
   // Sync isTranslateMessages state with ref
   useEffect(() => {
@@ -78,7 +81,7 @@ function Home() {
     };
 
     conn.current.onerror = (err) => console.error("WebSocket error:", err);
-    
+
   }, []);
 
   useEffect(() => {
@@ -129,7 +132,7 @@ function Home() {
           yourConn.current.onicecandidate = (event) => {
             if (event.candidate) send({ type: "candidate", candidate: event.candidate });
           };
-          
+
         })
         .catch((error) => console.error("Media device error:", error));
     }
@@ -290,75 +293,41 @@ function Home() {
     }
   };
 
-  // const startTranscription = () => {
-  //   const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-  //   recognition.continuous = true;
-  //   recognition.interimResults = true;
-  //   recognition.lang = selectedLanguage;
-  //   recognition.onresult = (event) => {
-  //     const transcript = event.results[event.results.length - 1][0].transcript;
-  //     send({ type: "transcript", message: transcript, senderLanguage: selectedLanguage });
-  //     setTransScript((prev) => [
-  //       ...prev,
-  //       { sender: "You", text: transcript, isTranscription: isTranslateMessages },
-  //     ]);
-  //   };
-  //   recognition.start();
-  // };
-
   const startTranscription = () => {
-    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = selectedLanguage;
-
-    let buffer = ""; // Buffer for storing transcript
-    const wordLimit = 20; // Word limit before printing
-    let pauseTimeout = null; // Timeout for handling pauses
-    let lastResultIndex = 0; // Track the last processed result index
-
-    // Function to flush buffer and send the message
-    const flushBuffer = () => {
-      if (buffer.trim()) {
-        send({ type: "transcript", message: buffer, senderLanguage: selectedLanguage });
-        setTransScript((prev) => [
-          ...prev,
-          { sender: "You", text: buffer, isTranscription: isTranslateMessages },
-        ]);
-        buffer = ""; // Clear the buffer
-      }
-    };
-
-    recognition.onresult = (event) => {
-      const transcript = event.results[event.results.length - 1][0].transcript.trim();
-      buffer += " " + transcript; // Append to buffer
-
-      // Check for word limit
-      if (buffer.split(/\s+/).length >= wordLimit) {
-        flushBuffer();
-      }
-
-      // Clear and reset pause timer
-      if (pauseTimeout) clearTimeout(pauseTimeout);
-      pauseTimeout = setTimeout(() => {
-        flushBuffer(); // Flush buffer after a pause
-      }, 1000); // Adjust pause duration (in ms) as needed
-    };
-
-    recognition.onend = () => {
-      // Handle end of speech (optional)
-      flushBuffer(); // Flush remaining transcript
-      recognition.start(); // Restart recognition for continuous transcription
-    };
-
-    recognition.onerror = (event) => {
-      console.error("Speech recognition error:", event.error);
-      recognition.stop(); // Stop on error to prevent looping issues
-    };
-
-    recognition.start();
+    if (!browserSupportsSpeechRecognition) {
+      return alert("Your browser does not support speech recognition.");
+    }
+  
+    // Start listening with continuous mode
+    SpeechRecognition.startListening({
+      continuous: true,
+      interimResults: true,
+      language: selectedLanguage,
+    });
   };
 
+  // useEffect to send transcript updates whenever it changes
+  useEffect(() => {
+    if (transcript) {
+      // Send the updated transcript to the server
+      send({
+        type: "transcript",
+        message: transcript,
+        senderLanguage: selectedLanguage,
+      });
+  
+      // Update the transcription state with the new transcript
+      setTransScript((prev) => [
+        { sender: "You", text: transcript, isTranscription: isTranslateMessages },
+      ]);
+    
+    }
+  }, [transcript]);  // This effect runs whenever `transcript` changes
+  
+  const stopTranscription = () => {
+    // Stop listening
+    SpeechRecognition.stopListening();
+  };
 
   const handleTranscription = (message, translateMessage) => {
     if (isTranslateMessagesRef.current) {
@@ -366,11 +335,6 @@ function Home() {
     } else {
       setTransScript((prev) => [...prev, { sender: connectedUser.current, text: message }]);
     }
-  };
-
-  const stopTranscription = () => {
-    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-    recognition.stop();
   };
 
   const handleEmojiClick = (emoji) => {
