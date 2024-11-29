@@ -1,0 +1,593 @@
+
+this is client
+
+import React, { useState, useEffect, useRef } from "react";
+import EmojiPicker from "emoji-picker-react";
+import "./App.css"; // Add CSS for animations and colors
+
+function Home() {
+  const [name, setName] = useState("");
+  const [isLogin, setIsLogin] = useState(false);
+  const [isIncoming, setIsIncoming] = useState(false);
+  const [loginInput, setLoginInput] = useState("");
+  const [callInput, setCallInput] = useState("");
+  const [chatInput, setChatInput] = useState("");
+  const [messages, setMessages] = useState([]);
+  const [transScript, setTransScript] = useState([]);
+  const [callDuration, setCallDuration] = useState(0);
+  const [isCallActive, setIsCallActive] = useState(false);
+  const [selectedLanguage, setSelectedLanguage] = useState("en");
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [isTranslateMessages, setisTranslateMessages] = useState(false);
+  const [pendingCaller, setPendingCaller] = useState(null);
+  const [isBusy, setIsBusy] = useState(false);
+
+  // Refs for stable references
+  const connectedUser = useRef("");
+  const callerName = useRef("");
+  const conn = useRef(null);
+  const yourConn = useRef(null);
+  const stream = useRef(null);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const isTranslateMessagesRef = useRef(isTranslateMessages);
+
+  // Sync isTranslateMessages state with ref
+  useEffect(() => {
+    isTranslateMessagesRef.current = isTranslateMessages;
+  }, [isTranslateMessages]);
+
+  useEffect(() => {
+    conn.current = new WebSocket("ws://localhost:9090");
+
+    conn.current.onopen = () => console.log("Connected to the signaling server");
+
+    conn.current.onmessage = (msg) => {
+      const data = JSON.parse(msg.data);
+
+      switch (data.type) {
+        case "login":
+          handleLogin(data.success);
+          break;
+        case "offer":
+          handleOffer(data.offer, data.name);
+          break;
+        case "answer":
+          handleAnswer(data.answer);
+          break;
+        case "candidate":
+          handleCandidate(data.candidate);
+          break;
+        case "reject":
+          alert("Your call was rejected.");
+          handleLeave();
+          break;
+        case "message":
+          handleIncomingMessage(data.message, data.transmsg);
+          break;
+        case "transcript":
+          handleTranscription(data.message, data.transmsg);
+          break;
+        case "file":
+          handleIncomingFile(data.file, data.fileName);
+          break;
+        case "leave":
+          alert(`${connectedUser.current} has left the call.`);
+          handleLeave();
+          break;
+        default:
+          break;
+      }
+    };
+
+    conn.current.onerror = (err) => console.error("WebSocket error:", err);
+  }, []);
+
+  useEffect(() => {
+    let timer;
+    if (isCallActive) {
+      timer = setInterval(() => setCallDuration((prev) => prev + 1), 1000);
+    } else {
+      clearInterval(timer);
+    }
+    return () => clearInterval(timer);
+  }, [isCallActive]);
+
+  const send = (message) => {
+    if (!conn.current || conn.current.readyState !== WebSocket.OPEN) {
+      console.error("WebSocket is not connected.");
+      return;
+    }
+    if (connectedUser.current) message.name = connectedUser.current;
+    conn.current.send(JSON.stringify(message));
+  };
+
+  const handleAccess = () => {
+    if (loginInput.trim()) {
+      setName(loginInput);
+      send({ type: "login", name: loginInput, language: selectedLanguage });
+    }
+  };
+
+  const handleLogin = (success) => {
+    if (!success) {
+      alert("Try a different username.");
+    } else {
+      setIsLogin(true);
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: true })
+        .then((myStream) => {
+          stream.current = myStream;
+          if (localVideoRef.current) localVideoRef.current.srcObject = myStream;
+
+          const configuration = { iceServers: [{ urls: "stun:stun2.1.google.com:19302" }] };
+          yourConn.current = new RTCPeerConnection(configuration);
+          yourConn.current.addStream(myStream);
+
+          yourConn.current.onaddstream = (e) => {
+            if (remoteVideoRef.current) remoteVideoRef.current.srcObject = e.stream;
+          };
+
+          yourConn.current.onicecandidate = (event) => {
+            if (event.candidate) send({ type: "candidate", candidate: event.candidate });
+          };
+        })
+        .catch((error) => console.error("Media device error:", error));
+    }
+  };
+
+  const handleCall = () => {
+    const callToUsername = callInput.trim();
+    if (callToUsername === name) {
+      alert("You cannot call yourself!");
+      return;
+    }
+
+    if (isCallActive) {
+      alert("You are already in a call!");
+      return;
+    }
+
+    if (callToUsername.length > 0) {
+      connectedUser.current = callToUsername;
+      yourConn.current
+        .createOffer()
+        .then((offer) => {
+          yourConn.current.setLocalDescription(offer);
+          send({ type: "offer", offer: offer });
+        })
+        .catch((err) => console.error("Error creating an offer:", err));
+    }
+  };
+
+  const handleOffer = async (offer, name) => {
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null; // Clear previous remote stream
+    }
+
+    if (isCallActive) {
+      setPendingCaller({ offer, name });
+      alert(`${name} is calling you. Finish your current call or accept the new call.`);
+      return;
+    }
+    connectedUser.current = name;
+    callerName.current = name;
+    await yourConn.current.setRemoteDescription(new RTCSessionDescription(offer));
+    setIsIncoming(true);
+  };
+
+  const handleAnswer = (answer) => {
+    if (yourConn.current) {
+      yourConn.current.setRemoteDescription(new RTCSessionDescription(answer));
+    }
+    setIsCallActive(true);
+  };
+
+  const handleCandidate = (candidate) => {
+    if (yourConn.current.remoteDescription) {
+      yourConn.current.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+  };
+
+  const handleLeave = () => {
+    connectedUser.current = "";
+    setIsCallActive(false);
+    setCallDuration(0);
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    if (yourConn.current) {
+      yourConn.current.close();
+      yourConn.current.onicecandidate = null;
+      yourConn.current.onaddstream = null;
+    }
+
+    if (pendingCaller) {
+      const { offer, name } = pendingCaller;
+      setPendingCaller(null);
+      handleOffer(offer, name);
+    }
+  };
+
+  const toggleVideo = () => {
+    const videoTrack = stream.current.getVideoTracks()[0];
+    videoTrack.enabled = !videoTrack.enabled;
+  };
+
+  const toggleAudio = () => {
+    const audioTrack = stream.current.getAudioTracks()[0];
+    audioTrack.enabled = !audioTrack.enabled;
+  };
+
+  const sendMessage = () => {
+    if (connectedUser.current) {
+      send({ type: "message", message: chatInput, senderLanguage: selectedLanguage });
+      setMessages((prev) => [...prev, { sender: "You", text: chatInput }]);
+      setChatInput("");
+    }
+  };
+
+  const handleAcceptCall = () => {
+    if (isCallActive) {
+      handleLeave();
+    }
+    connectedUser.current = callerName.current;
+    if (yourConn.current) {
+      yourConn.current
+        .createAnswer()
+        .then((answer) => {
+          yourConn.current.setLocalDescription(answer);
+          send({ type: "answer", answer: answer });
+        })
+        .catch((err) => console.error("Error creating answer:", err));
+    }
+    setIsIncoming(false);
+    setIsCallActive(true);
+    setPendingCaller(null);
+  };
+
+  const handleRejectCall = () => {
+    send({ type: "reject" });
+    setIsIncoming(false);
+    connectedUser.current = "";
+  };
+
+  const handleIncomingMessage = (message, translateMessage) => {
+    if (isTranslateMessagesRef.current) {
+      setMessages((prev) => [...prev, { sender: connectedUser.current, text: translateMessage }]);
+    } else {
+      setMessages((prev) => [...prev, { sender: connectedUser.current, text: message }]);
+    }
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = () => {
+      send({ type: "file", file: reader.result, fileName: file.name });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleIncomingFile = (file, fileName) => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        sender: connectedUser.current,
+        text: (
+          <a href={file} download={fileName}>
+            {fileName}
+          </a>
+        ),
+      },
+    ]);
+  };
+
+  const startScreenShare = async () => {
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      yourConn.current.addTrack(screenStream.getVideoTracks()[0], screenStream);
+    } catch (err) {
+      console.error("Screen share error:", err);
+    }
+  };
+
+  const startTranscription = () => {
+    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = selectedLanguage;
+    recognition.onresult = (event) => {
+      const transcript = event.results[event.results.length - 1][0].transcript;
+      send({ type: "transcript", message: transcript, senderLanguage: selectedLanguage });
+      setTransScript((prev) => [
+        ...prev,
+        { sender: "You", text: transcript, isTranscription: isTranslateMessages },
+      ]);
+    };
+    recognition.start();
+  };
+
+  const handleTranscription = (message, translateMessage) => {
+    if (isTranslateMessagesRef.current) {
+      setTransScript((prev) => [...prev, { sender: connectedUser.current, text: translateMessage }]);
+    } else {
+      setTransScript((prev) => [...prev, { sender: connectedUser.current, text: message }]);
+    }
+  };
+
+  const stopTranscription = () => {
+    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+    recognition.stop();
+  };
+
+  const handleEmojiClick = (emoji) => {
+    setChatInput((prevInput) => prevInput + emoji.emoji);
+  };
+
+  return (
+    <div>
+      {!isLogin ? (
+        <div>
+          <h2>Login</h2>
+          <input
+            type="text"
+            placeholder="Enter your username"
+            value={loginInput}
+            onChange={(e) => setLoginInput(e.target.value)}
+          />
+          <select value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value)}>
+            <option value="en" defaultValue="en">English</option>
+            <option value="bn">Bengali</option>
+            <option value="gu">Gujarati</option>
+            <option value="hi">Hindi</option>
+            <option value="kn">Kannada</option>
+            <option value="ml">Malayalam</option>
+            <option value="mr">Marathi</option>
+            <option value="ne">Nepali</option>
+            <option value="ma">Punjabi</option>
+            <option value="ta">Tamil</option>
+            <option value="te">Telugu</option>
+            <option value="ur">Urdu</option>
+
+          </select>
+          <button onClick={handleAccess}>Login</button>
+        </div>
+      ) : (
+        <div>
+          {isIncoming && (
+            <div>
+              <p>{callerName.current} is calling...</p>
+              <button onClick={handleAcceptCall}>Accept</button>
+              <button onClick={handleRejectCall}>Reject</button>
+            </div>
+          )}
+          <div>
+            <video ref={localVideoRef} autoPlay width={200} />
+            <video ref={remoteVideoRef} autoPlay width={200} />
+          </div>
+          <div>Call Duration: {Math.floor(callDuration / 60)}:{callDuration % 60}</div>
+          <div>
+            <h3>Transcript</h3>
+            <ul>
+              {transScript.map((msg, index) => (
+                <li key={index}>
+                  <b>{msg.sender}:</b> {msg.text}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <input
+              type="text"
+              value={callInput}
+              onChange={(e) => setCallInput(e.target.value)}
+              placeholder="Enter username to call"
+              disabled={isCallActive}
+            />
+            <button onClick={handleCall} disabled={isCallActive}>Call</button>
+            <button onClick={handleLeave}>Hang Up</button>
+            <button onClick={toggleVideo}>Toggle Video</button>
+            <button onClick={toggleAudio}>Toggle Audio</button>
+            <button onClick={startScreenShare}>Share Screen</button>
+            <button onClick={startTranscription}>Start Transcription</button>
+            <button onClick={stopTranscription}>Stop Transcription</button>
+          </div>
+          <div>
+            <label>
+              <input
+                type="checkbox"
+                checked={isTranslateMessages}
+                onChange={() => setisTranslateMessages(!isTranslateMessages)}
+              />
+              Translate Messages: {isTranslateMessages ? "On" : "Off"}
+            </label>
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              placeholder="Type your message"
+            />
+            <button onClick={sendMessage} disabled={chatInput !== '' ? false : true}>Send</button>
+            <button onClick={() => setShowEmojiPicker(!showEmojiPicker)}>😊</button>
+            {showEmojiPicker && (
+              <EmojiPicker onEmojiClick={handleEmojiClick} />
+            )}
+          </div>
+          <input type="file" onChange={handleFileUpload} />
+          <div>
+            <h3>Messages</h3>
+            <ul>
+              {messages.map((msg, index) => (
+                <li key={index}>
+                  <b>{msg.sender}:</b> {msg.text}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default Home;
+
+
+
+-------------------------------------------------------------------------------------------
+
+this is server.
+
+
+
+import translate from "translate-google-api";
+
+const handleWebSocketConnection = (connection, users) => {
+
+  connection.on("message", async (message) => {
+    let data;
+    try {
+      data = JSON.parse(message);
+    } catch (e) {
+      console.error("Invalid JSON:", e);
+      return;
+    }
+
+    switch (data.type) {
+      case "login":
+        if (users[data.name]) {
+          sendTo(connection, { type: "login", success: false });
+        } else {
+          users[data.name] = { connection, language: data.language };
+          connection.name = data.name;
+          sendTo(connection, { type: "login", success: true });
+        }
+        break;
+
+      case "offer":
+        if (users[data.name]) {
+          sendTo(users[data.name].connection, {
+            type: "offer",
+            offer: data.offer,
+            name: connection.name,
+          });
+        }
+        break;
+
+      case "answer":
+        if (users[data.name]) {
+          sendTo(users[data.name].connection, {
+            type: "answer",
+            answer: data.answer,
+          });
+        }
+        break;
+
+      case "candidate":
+        if (users[data.name]) {
+          sendTo(users[data.name].connection, {
+            type: "candidate",
+            candidate: data.candidate,
+          });
+        }
+        break;
+
+      case "message":
+        if (users[data.name]) {
+          try {
+            // Await the translation result
+            const translatedMessage = await translateText(data.message, users[data.name].language);
+            sendTo(users[data.name].connection, {
+              type: "message",
+              message: data.message,
+              transmsg: translatedMessage,
+            });
+          } catch (error) {
+            console.error("Error in message translation:", error);
+            sendTo(users[data.name].connection, {
+              type: "message",
+              message: data.message,
+              transmsg: data.message, // Send original message if translation fails
+            });
+          }
+        }
+        break;
+
+        case "transcript":
+        if (users[data.name]) {
+          
+          try {
+            // Await the translation result
+            const translatedMessage = await translateText(data.message, users[data.name].language);
+            sendTo(users[data.name].connection, {
+              type: "transcript",
+              message: data.message,
+              transmsg: translatedMessage,
+            });
+          } catch (error) {
+            console.error("Error in message translation:", error);
+            sendTo(users[data.name].connection, {
+              type: "transcript",
+              message: data.message,
+              transmsg: data.message, // Send original message if translation fails
+            });
+          }
+        }
+        break;
+
+
+      case "file":
+        if (users[data.name]) {
+          sendTo(users[data.name].connection, {
+            type: "file",
+            file: data.file,
+            fileName: data.fileName,
+          });
+        }
+        break;
+
+      case "leave":
+        if (users[data.name]) {
+          sendTo(users[data.name].connection, { type: "leave" });
+        }
+        break;
+
+      default:
+        break;
+    }
+  });
+
+  //when user exits, for example closes a browser window 
+  //this may help if we are still in "offer","answer" or "candidate" state 
+
+  connection.on("close", () => {
+    if (connection.name) {
+      delete users[connection.name];
+      if (connection.otherName) {
+        const otherConn = users[connection.otherName];
+        if (otherConn) {
+          sendTo(otherConn, { type: "leave" });
+        }
+      }
+    }
+  });
+
+};
+
+function sendTo(connection, message) {
+  connection.send(JSON.stringify(message));
+}
+
+const translateText = async (text, targetLanguage) => {
+  try {
+    const translated = await translate(`${text}`, { to: targetLanguage });
+ 
+    return translated;
+  } catch (error) {
+    console.error("Translation error:", error);
+    return text; // Return the original text if translation fails
+  }
+};
+
+
+export { handleWebSocketConnection };
