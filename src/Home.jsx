@@ -115,28 +115,55 @@ function Home() {
       alert("Try a different username.");
     } else {
       setIsLogin(true);
+  
+      // Attempt to get user media with both video and audio
       navigator.mediaDevices
-        .getUserMedia({ video: true, audio: { echoCancellation: true }, })
+        .getUserMedia({ video: true, audio: { echoCancellation: true } })
         .then((myStream) => {
-          stream.current = myStream;
-          if (localVideoRef.current) localVideoRef.current.srcObject = myStream;
-
-          const configuration = { iceServers: [{ urls: "stun:stun2.1.google.com:19302" }] };
-          yourConn.current = new RTCPeerConnection(configuration);
-          yourConn.current.addStream(myStream);
-
-          yourConn.current.onaddstream = (e) => {
-            if (remoteVideoRef.current) remoteVideoRef.current.srcObject = e.stream;
-          };
-
-          yourConn.current.onicecandidate = (event) => {
-            if (event.candidate) send({ type: "candidate", candidate: event.candidate });
-          };
-
+          initializeConnection(myStream);
         })
-        .catch((error) => console.error("Media device error:", error));
+        .catch((error) => {
+          console.warn("Media device error:", error);
+          alert(
+            "No camera or microphone detected. You can still join the call without media."
+          );
+          // Initialize connection without media stream
+          initializeConnection(null);
+        });
     }
   };
+  
+  const initializeConnection = (myStream) => {
+    stream.current = myStream;
+  
+    if (myStream && localVideoRef.current) {
+      localVideoRef.current.srcObject = myStream;
+    } else if (localVideoRef.current) {
+      localVideoRef.current.poster = "/public/vite.svg"; // Placeholder image
+    }
+    
+  
+    const configuration = {
+      iceServers: [{ urls: "stun:stun2.1.google.com:19302" }],
+    };
+    yourConn.current = new RTCPeerConnection(configuration);
+  
+    if (myStream) {
+      yourConn.current.addStream(myStream);
+    }
+
+    yourConn.current.onaddstream = (e) => {
+      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = e.stream;
+    };
+  
+    yourConn.current.onicecandidate = (event) => {
+      if (event.candidate) {
+        send({ type: "candidate", candidate: event.candidate });
+      }
+    };
+  };
+  
+
 
   const handleCall = () => {
     const callToUsername = callInput.trim();
@@ -297,7 +324,7 @@ function Home() {
     if (!browserSupportsSpeechRecognition) {
       return alert("Your browser does not support speech recognition.");
     }
-  
+
     // Start listening with continuous mode
     SpeechRecognition.startListening({
       continuous: true,
@@ -315,15 +342,15 @@ function Home() {
         message: transcript,
         senderLanguage: selectedLanguage,
       });
-  
+
       // Update the transcription state with the new transcript
       setTransScript((prev) => [
         { sender: "You", text: transcript, isTranscription: isTranslateMessages },
       ]);
-    
+
     }
   }, [transcript]);  // This effect runs whenever `transcript` changes
-  
+
   const stopTranscription = () => {
     // Stop listening
     SpeechRecognition.stopListening();
@@ -331,9 +358,9 @@ function Home() {
 
   const handleTranscription = (message, translateMessage) => {
     if (isTranslateMessagesRef.current) {
-      setTransScript((prev) => [...prev, { sender: connectedUser.current, text: translateMessage }]);
+      setTransScript((prev) => [{ sender: connectedUser.current, text: translateMessage }]);
     } else {
-      setTransScript((prev) => [...prev, { sender: connectedUser.current, text: message }]);
+      setTransScript((prev) => [{ sender: connectedUser.current, text: message }]);
     }
   };
 

@@ -2,6 +2,7 @@
 this is client
 
 import React, { useState, useEffect, useRef } from "react";
+import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition'
 import EmojiPicker from "emoji-picker-react";
 import "./App.css"; // Add CSS for animations and colors
 
@@ -31,6 +32,8 @@ function Home() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const isTranslateMessagesRef = useRef(isTranslateMessages);
+
+  const { transcript, browserSupportsSpeechRecognition } = useSpeechRecognition();
 
   // Sync isTranslateMessages state with ref
   useEffect(() => {
@@ -81,6 +84,7 @@ function Home() {
     };
 
     conn.current.onerror = (err) => console.error("WebSocket error:", err);
+
   }, []);
 
   useEffect(() => {
@@ -114,27 +118,55 @@ function Home() {
       alert("Try a different username.");
     } else {
       setIsLogin(true);
+  
+      // Attempt to get user media with both video and audio
       navigator.mediaDevices
-        .getUserMedia({ video: true, audio: true })
+        .getUserMedia({ video: true, audio: { echoCancellation: true } })
         .then((myStream) => {
-          stream.current = myStream;
-          if (localVideoRef.current) localVideoRef.current.srcObject = myStream;
-
-          const configuration = { iceServers: [{ urls: "stun:stun2.1.google.com:19302" }] };
-          yourConn.current = new RTCPeerConnection(configuration);
-          yourConn.current.addStream(myStream);
-
-          yourConn.current.onaddstream = (e) => {
-            if (remoteVideoRef.current) remoteVideoRef.current.srcObject = e.stream;
-          };
-
-          yourConn.current.onicecandidate = (event) => {
-            if (event.candidate) send({ type: "candidate", candidate: event.candidate });
-          };
+          initializeConnection(myStream);
         })
-        .catch((error) => console.error("Media device error:", error));
+        .catch((error) => {
+          console.warn("Media device error:", error);
+          alert(
+            "No camera or microphone detected. You can still join the call without media."
+          );
+          // Initialize connection without media stream
+          initializeConnection(null);
+        });
     }
   };
+  
+  const initializeConnection = (myStream) => {
+    stream.current = myStream;
+  
+    if (myStream && localVideoRef.current) {
+      localVideoRef.current.srcObject = myStream;
+    } else if (localVideoRef.current) {
+      localVideoRef.current.poster = "/public/vite.svg"; // Placeholder image
+    }
+    
+  
+    const configuration = {
+      iceServers: [{ urls: "stun:stun2.1.google.com:19302" }],
+    };
+    yourConn.current = new RTCPeerConnection(configuration);
+  
+    if (myStream) {
+      yourConn.current.addStream(myStream);
+    }
+
+    yourConn.current.onaddstream = (e) => {
+      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = e.stream;
+    };
+  
+    yourConn.current.onicecandidate = (event) => {
+      if (event.candidate) {
+        send({ type: "candidate", candidate: event.candidate });
+      }
+    };
+  };
+  
+
 
   const handleCall = () => {
     const callToUsername = callInput.trim();
@@ -213,6 +245,7 @@ function Home() {
   };
 
   const toggleAudio = () => {
+    console.log(stream.current.getAudioTracks());
     const audioTrack = stream.current.getAudioTracks()[0];
     audioTrack.enabled = !audioTrack.enabled;
   };
@@ -291,32 +324,47 @@ function Home() {
   };
 
   const startTranscription = () => {
-    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = selectedLanguage;
-    recognition.onresult = (event) => {
-      const transcript = event.results[event.results.length - 1][0].transcript;
-      send({ type: "transcript", message: transcript, senderLanguage: selectedLanguage });
+    if (!browserSupportsSpeechRecognition) {
+      return alert("Your browser does not support speech recognition.");
+    }
+
+    // Start listening with continuous mode
+    SpeechRecognition.startListening({
+      continuous: true,
+      interimResults: true,
+      language: selectedLanguage,
+    });
+  };
+
+  // useEffect to send transcript updates whenever it changes
+  useEffect(() => {
+    if (transcript) {
+      // Send the updated transcript to the server
+      send({
+        type: "transcript",
+        message: transcript,
+        senderLanguage: selectedLanguage,
+      });
+
+      // Update the transcription state with the new transcript
       setTransScript((prev) => [
-        ...prev,
         { sender: "You", text: transcript, isTranscription: isTranslateMessages },
       ]);
-    };
-    recognition.start();
+
+    }
+  }, [transcript]);  // This effect runs whenever `transcript` changes
+
+  const stopTranscription = () => {
+    // Stop listening
+    SpeechRecognition.stopListening();
   };
 
   const handleTranscription = (message, translateMessage) => {
     if (isTranslateMessagesRef.current) {
-      setTransScript((prev) => [...prev, { sender: connectedUser.current, text: translateMessage }]);
+      setTransScript((prev) => [{ sender: connectedUser.current, text: translateMessage }]);
     } else {
-      setTransScript((prev) => [...prev, { sender: connectedUser.current, text: message }]);
+      setTransScript((prev) => [{ sender: connectedUser.current, text: message }]);
     }
-  };
-
-  const stopTranscription = () => {
-    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-    recognition.stop();
   };
 
   const handleEmojiClick = (emoji) => {
@@ -361,8 +409,8 @@ function Home() {
             </div>
           )}
           <div>
-            <video ref={localVideoRef} autoPlay width={200} />
-            <video ref={remoteVideoRef} autoPlay width={200} />
+            <video ref={localVideoRef} autoPlay width={280} />
+            <video ref={remoteVideoRef} autoPlay width={280} />
           </div>
           <div>Call Duration: {Math.floor(callDuration / 60)}:{callDuration % 60}</div>
           <div>
@@ -431,6 +479,7 @@ function Home() {
 }
 
 export default Home;
+
 
 
 
