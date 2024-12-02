@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition'
 import EmojiPicker from "emoji-picker-react";
-import "./App.css"; // Add CSS for animations and colors
 
 function Home() {
   const [name, setName] = useState("");
@@ -38,7 +37,7 @@ function Home() {
   }, [isTranslateMessages]);
 
   useEffect(() => {
-    conn.current = new WebSocket("ws://localhost:9090");
+    conn.current = new WebSocket(`ws://${window.location.hostname}:9090`);
 
     conn.current.onopen = () => console.log("Connected to the signaling server");
 
@@ -110,107 +109,224 @@ function Home() {
     }
   };
 
-  const handleLogin = (success) => {
+  const handleLogin = async (success) => {
     if (!success) {
       alert("Try a different username.");
-    } else {
-      setIsLogin(true);
-  
-      // Attempt to get user media with both video and audio
-      navigator.mediaDevices
-        .getUserMedia({ video: true, audio: { echoCancellation: true } })
-        .then((myStream) => {
-          initializeConnection(myStream);
-        })
-        .catch((error) => {
-          console.warn("Media device error:", error);
-          alert(
-            "No camera or microphone detected. You can still join the call without media."
-          );
-          // Initialize connection without media stream
-          initializeConnection(null);
-        });
+      return;
     }
-  };
-  
-  const initializeConnection = (myStream) => {
-    stream.current = myStream;
-  
-    if (myStream && localVideoRef.current) {
-      localVideoRef.current.srcObject = myStream;
-    } else if (localVideoRef.current) {
-      localVideoRef.current.poster = "/public/vite.svg"; // Placeholder image
+
+    setIsLogin(true);
+
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const hasVideoInput = devices.some(device => device.kind === "videoinput");
+      const hasAudioInput = devices.some(device => device.kind === "audioinput");
+    
+      // Set constraints based on available devices
+      const constraints = {
+        video: hasVideoInput,
+        audio: hasAudioInput ? { echoCancellation: true } : false,
+      };
+    
+      let myStream = null;
+      if (hasVideoInput || hasAudioInput) {
+        myStream = await navigator.mediaDevices.getUserMedia(constraints);
+      }
+    
+      // If the user has a mic but no camera, create a fake video stream
+      if (hasAudioInput && !hasVideoInput) {
+        const fakeVideoStream = await createFakeVideoStream();
+        if (fakeVideoStream) {
+          console.log("Fake video created for audio-only user.");
+          initializeConnection(myStream, fakeVideoStream);
+        }
+        return;
+      }
+    
+      // If the user has both mic and camera, proceed with the stream
+      if (myStream) {
+        console.log("Using real media stream.");
+        initializeConnection(myStream, null);
+        return;
+      }
+    
+      // If the user has no mic or camera, show an alert and join without media
+      alert("No camera or microphone detected. Joining without media.");
+      const fakeVideoStream = await createFakeVideoStream();
+      if (fakeVideoStream) {
+        console.log("Joining without media using a fake video stream.");
+        initializeConnection(null, fakeVideoStream);
+      }
+    } catch (error) {
+      console.warn("Media device error:", error);
+      alert("An error occurred while accessing media devices. Joining without media.");
+    
+      const fakeVideoStream = await createFakeVideoStream();
+      if (fakeVideoStream) {
+        console.log("Joining without media using a fake video stream.");
+        initializeConnection(null, fakeVideoStream);
+      }
     }
     
-  
+  };
+
+  const initializeConnection = async (myStream, fakeVideoStream) => {
+    
+    if (!myStream) return;
+
+    stream.current = myStream;
+
+    const hasVideoTrack = myStream.getVideoTracks().length > 0;
+    if (myStream && localVideoRef.current) {
+        // Ensure the stream is fully ready before processing it
+        if (myStream.getTracks().length > 0) {
+            // Handle Audio Tracks
+            const audioTrack = myStream.getAudioTracks()[0];
+            if (audioTrack) {
+                const audio = new Audio();
+                audio.srcObject = new MediaStream([audioTrack]);
+                audio.play().catch((err) => console.error("Audio playback error:", err));
+            }
+
+            // Handle Video Tracks
+            if (hasVideoTrack) {
+                localVideoRef.current.poster = "";
+                localVideoRef.current.srcObject = myStream;
+            } else {
+                localVideoRef.current.poster = "";
+                localVideoRef.current.srcObject = fakeVideoStream;
+            }
+        } else {
+            console.error('No tracks found in the stream');
+        }
+    }
+
     const configuration = {
-      iceServers: [{ urls: "stun:stun2.1.google.com:19302" }],
+        iceServers: [{ urls: "stun:stun2.1.google.com:19302" }],
     };
     yourConn.current = new RTCPeerConnection(configuration);
-  
-    if (myStream) {
-      yourConn.current.addStream(myStream);
+
+    // If no video track, create a fake video stream
+    if (!hasVideoTrack) {
+        fakeVideoStream.getTracks().forEach((track) => {yourConn.current.addTrack(track, fakeVideoStream)
+        });
+        
     }
 
-    yourConn.current.onaddstream = (e) => {
-      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = e.stream;
-    };
-  
+    if (myStream) {
+        myStream.getTracks().forEach(track => {yourConn.current.addTrack(track, myStream)
+        });
+       
+    }
+
     yourConn.current.onicecandidate = (event) => {
       if (event.candidate) {
-        send({ type: "candidate", candidate: event.candidate });
+          send({ type: "candidate", candidate: event.candidate });
       }
+  };
+
+    
+
+    yourConn.current.ontrack = (event) => {
+        const [remoteStream] = event.streams;
+
+        if (remoteStream) {
+            // Check and handle video track for remote stream
+            const videoTrack = remoteStream.getVideoTracks()[0];
+            if (videoTrack) {
+                remoteVideoRef.current.srcObject = remoteStream;
+            } else {
+                remoteVideoRef.current.srcObject = null;
+            }
+
+            // Handle audio track for remote stream
+            const audioTrack = remoteStream.getAudioTracks()[0];
+            if (audioTrack) {
+                const audio = new Audio();
+                audio.srcObject = remoteStream;
+                audio.play().catch((err) => console.error("Audio playback error:", err));
+            }
+        }
     };
-  };
+
+};
+
+const createFakeVideoStream = () => {
+    return new Promise((resolve, reject) => {
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        canvas.width = 640;
+        canvas.height = 480;
+
+        context.fillStyle = "#000000";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = "#FFFFFF";
+        context.font = "30px Arial";
+        context.fillText("No Video", 200, 200);
+
+        // Create a MediaStream from the canvas
+        const stream = canvas.captureStream();
+        if (stream) {
+            resolve(stream);
+        } else {
+            reject("Failed to create fake video stream");
+        }
+    });
+};
+
+const handleCall = async () => {
+  if (callInput.trim() && !isCallActive) {
+    connectedUser.current = callInput.trim();
+
+    // Ensure local tracks are added before creating an offer
+    if (!stream.current) {
+      stream.current = await getMediaStream();
+      stream.current.getTracks().forEach((track) =>
+        yourConn.current.addTrack(track, stream.current)
+      );
+    }
+
+    const offer = await yourConn.current.createOffer();
+    await yourConn.current.setLocalDescription(offer);
+    send({ type: "offer", offer });
+  }
+};
+
   
-
-
-  const handleCall = () => {
-    const callToUsername = callInput.trim();
-    if (callToUsername === name) {
-      alert("You cannot call yourself!");
-      return;
-    }
-
-    if (isCallActive) {
-      alert("You are already in a call!");
-      return;
-    }
-
-    if (callToUsername.length > 0) {
-      connectedUser.current = callToUsername;
-      yourConn.current
-        .createOffer()
-        .then((offer) => {
-          yourConn.current.setLocalDescription(offer);
-          send({ type: "offer", offer: offer });
-        })
-        .catch((err) => console.error("Error creating an offer:", err));
-    }
-  };
-
   const handleOffer = async (offer, name) => {
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = null; // Clear previous remote stream
-    }
+    try {
+      
 
-    if (isCallActive) {
-      setPendingCaller({ offer, name });
-      alert(`${name} is calling you. Finish your current call or accept the new call.`);
-      return;
+      if (isCallActive) {
+        setPendingCaller({ offer, name });
+        alert(`${name} is calling you. Finish your current call or accept the new call.`);
+        return;
+      }
+      await yourConn.current.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await yourConn.current.createAnswer();
+      await yourConn.current.setLocalDescription(answer);
+      send({ type: "answer", answer }); // Send answer back to the offerer
+    } catch (error) {
+      console.error("Error handling offer:", error);
     }
-    connectedUser.current = name;
-    callerName.current = name;
-    await yourConn.current.setRemoteDescription(new RTCSessionDescription(offer));
-    setIsIncoming(true);
+    // Save the offer and caller information for later acceptance
+    setPendingCaller({ offer, name });
+    connectedUser.current = name; // Set the connected user's name
+    callerName.current = name; // Track the caller for UI 
+    setIsIncoming(true); // Indicate that there's an incoming call
+
   };
 
-  const handleAnswer = (answer) => {
-    if (yourConn.current) {
-      yourConn.current.setRemoteDescription(new RTCSessionDescription(answer));
+  const handleAnswer = async (answer) => {
+    try {
+      await yourConn.current.setRemoteDescription(new RTCSessionDescription(answer));
+      setIsCallActive(true);
+    } catch (err) {
+      console.error("Error setting remote description:", err);
     }
-    setIsCallActive(true);
   };
+
+
 
   const handleCandidate = (candidate) => {
     if (yourConn.current.remoteDescription) {
@@ -262,12 +378,17 @@ function Home() {
     connectedUser.current = callerName.current;
     if (yourConn.current) {
       yourConn.current
-        .createAnswer()
+        .setRemoteDescription(new RTCSessionDescription(pendingCaller.offer))
+        .then(() => {
+          return yourConn.current.createAnswer();
+        })
         .then((answer) => {
           yourConn.current.setLocalDescription(answer);
           send({ type: "answer", answer: answer });
+          setIsCallActive(true);
+          setPendingCaller(null);
+          setIsIncoming(false);
         })
-        .catch((err) => console.error("Error creating answer:", err));
     }
     setIsIncoming(false);
     setIsCallActive(true);
@@ -328,7 +449,7 @@ function Home() {
     // Start listening with continuous mode
     SpeechRecognition.startListening({
       continuous: true,
-      interimResults: true,
+      interimResults: false,
       language: selectedLanguage,
     });
   };
@@ -372,6 +493,7 @@ function Home() {
     <div>
       {!isLogin ? (
         <div>
+          <img src="/vite.svg"></img>
           <h2>Login</h2>
           <input
             type="text"
@@ -406,7 +528,7 @@ function Home() {
             </div>
           )}
           <div>
-            <video ref={localVideoRef} autoPlay width={280} />
+            <video ref={localVideoRef} autoPlay width={280} poster={stream.current ? "" : "/vite.svg"} />
             <video ref={remoteVideoRef} autoPlay width={280} />
           </div>
           <div>Call Duration: {Math.floor(callDuration / 60)}:{callDuration % 60}</div>
@@ -476,3 +598,4 @@ function Home() {
 }
 
 export default Home;
+

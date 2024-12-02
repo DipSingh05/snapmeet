@@ -10,10 +10,11 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     middlewareMode: true,
+    cors: true,
   },
   ssr: true,
   build: {
     target: 'esnext',
   },
-
+  base:'/',
 })
