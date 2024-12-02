@@ -6,6 +6,7 @@ async function startWebSocketServer() {
     const wss = new WebSocketServer({
         port,
         host: "0.0.0.0",
+        
     });
 
     // Map to store users and their WebSocket connections

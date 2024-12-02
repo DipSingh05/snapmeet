@@ -434,12 +434,53 @@ const handleCall = async () => {
 
   const startScreenShare = async () => {
     try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      yourConn.current.addTrack(screenStream.getVideoTracks()[0], screenStream);
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const screenTrack = screenStream.getVideoTracks()[0];
+  
+      // Replace the video track in the peer connection
+      const sender = yourConn.current
+        .getSenders()
+        .find((s) => s.track && s.track.kind === "video");
+  
+      if (sender) {
+        // Replace the existing video track with the screen-sharing track
+        await sender.replaceTrack(screenTrack);
+      } else {
+        // If no video sender is found, add the screen-sharing track
+        yourConn.current.addTrack(screenTrack, screenStream);
+      }
+  
+      // Update the local video to display the shared screen
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = screenStream;
+      }
+  
+      // Stop screen sharing when the user stops sharing
+      screenTrack.onended = () => {
+        stopScreenShare();
+      };
     } catch (err) {
       console.error("Screen share error:", err);
     }
   };
+  
+  const stopScreenShare = () => {
+    // Reset the original video stream
+    const videoTrack = stream.current.getVideoTracks()[0];
+    const sender = yourConn.current
+      .getSenders()
+      .find((s) => s.track && s.track.kind === "video");
+  
+    if (sender && videoTrack) {
+      sender.replaceTrack(videoTrack);
+    }
+  
+    // Update the local video element to display the original stream
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = stream.current;
+    }
+  };
+  
 
   const startTranscription = () => {
     if (!browserSupportsSpeechRecognition) {

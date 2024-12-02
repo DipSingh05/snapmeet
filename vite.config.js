@@ -11,6 +11,7 @@ export default defineConfig({
     port: 5173,
     middlewareMode: true,
     cors: true,
+    https:true,
   },
   ssr: true,
   build: {
